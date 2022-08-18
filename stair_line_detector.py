@@ -140,7 +140,10 @@ class StairLineDetector:
         h, w, c = img.shape  # height, width, channel
         img = cv2.resize(img, (512, 512))  # resize
         for l in lines:
-            cv2.line(img, (int(l[0]), int(l[1])), (int(l[2]), int(l[3])), (0,200,200), 1,16)
+            cv2.line(
+                img, (int(l[0]), int(l[1])), (int(l[2]), int(l[3])),
+                (0, 0, 256), 2,
+            )
         img = cv2.resize(img, (w, h))  # re-resize
         return img
 
@@ -216,7 +219,7 @@ if __name__ == "__main__":
     # _, lines = detector.find_edges_and_lines(img)
     img = detector.visualise(img, lines)
     cv2.imwrite(file[:-4] + "_with_lines" + file[-4:], img)
-    lines = detector.postprocess_lines(lines)
+    # lines = detector.postprocess_lines(lines)
 
     thetas = np.array([
         wraptopi(np.arctan2(l[3]-l[1], l[2]-l[0]) - 0.5*np.pi)
