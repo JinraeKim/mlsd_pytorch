@@ -78,11 +78,11 @@ def pred_lines(image, model,
             segments_list.append([x_start, y_start, x_end, y_end])
 
     lines = 2 * np.array(segments_list)  # 256 > 512
-    lines[:, 0] = lines[:, 0] * w_ratio
-    lines[:, 1] = lines[:, 1] * h_ratio
-    lines[:, 2] = lines[:, 2] * w_ratio
-    lines[:, 3] = lines[:, 3] * h_ratio
-
+    if len(lines.shape) == 2:
+        lines[:, 0] = lines[:, 0] * w_ratio
+        lines[:, 1] = lines[:, 1] * h_ratio
+        lines[:, 2] = lines[:, 2] * w_ratio
+        lines[:, 3] = lines[:, 3] * h_ratio
     return lines
 
 

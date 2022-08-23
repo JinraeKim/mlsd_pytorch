@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 from copy import copy
 import cv2
 
@@ -10,7 +11,6 @@ from utils import pred_lines
 import torch
 
 from numpy.random import default_rng
-rng = default_rng()
 
 
 class RANSAC:
@@ -30,33 +30,38 @@ class RANSAC:
         self.best_fit = None
         self.best_error = np.inf
         self.inlier_indices = None
+        self.rng = default_rng()
 
     def fit(self, X, y):
-        for _ in range(self.k):
-            ids = rng.permutation(X.shape[0])
+        if len(X) == 0:
+            pass
+        else:
+            for _ in range(self.k):
+                ids = self.rng.permutation(X.shape[0])
+                # n = min(self.n, len(ids))
+                n = self.n
 
-            maybe_inliers = ids[: self.n]
-            maybe_model = copy(self.model).fit(X[maybe_inliers], y[maybe_inliers])
+                maybe_inliers = ids[:n]
+                maybe_model = copy(self.model).fit(X[maybe_inliers], y[maybe_inliers])
 
-            thresholded = (
-                self.loss(y[ids][self.n:], maybe_model.predict(X[ids][self.n:]))
-                < self.t
-            )
-
-            inlier_ids = ids[self.n:][np.flatnonzero(thresholded).flatten()]
-
-            if inlier_ids.size > self.d:
-                inlier_ids_including_maybe = np.hstack([maybe_inliers, inlier_ids])
-                better_model = copy(self.model).fit(X[inlier_ids_including_maybe], y[inlier_ids_including_maybe])
-
-                this_error = self.metric(
-                    y[inlier_ids_including_maybe], better_model.predict(X[inlier_ids_including_maybe])
+                thresholded = (
+                    self.loss(y[ids][n:], maybe_model.predict(X[ids][n:]))
+                    < self.t
                 )
+                inlier_ids = ids[n:][np.flatnonzero(thresholded).flatten()]
 
-                if this_error < self.best_error:
-                    self.best_error = this_error
-                    self.best_fit = maybe_model
-                    self.inlier_indices = inlier_ids
+                if inlier_ids.size > self.d:
+                    inlier_ids_including_maybe = np.hstack([maybe_inliers, inlier_ids])
+                    better_model = copy(self.model).fit(X[inlier_ids_including_maybe], y[inlier_ids_including_maybe])
+
+                    this_error = self.metric(
+                        y[inlier_ids_including_maybe], better_model.predict(X[inlier_ids_including_maybe])
+                    )
+
+                    if this_error < self.best_error:
+                        self.best_error = this_error
+                        self.best_fit = maybe_model
+                        self.inlier_indices = inlier_ids
         return self
 
     def predict(self, X):
@@ -81,11 +86,16 @@ def wraptopi(angles):
 class LinearRegressor:
     def __init__(self):
         self.params = None
+        self.params_dim = (1+1, 1)  # in case of receiving no data; +1 is for bias
 
     def fit(self, X: np.ndarray, y: np.ndarray):
         r, _ = X.shape
         X = np.hstack([np.ones((r, 1)), X])
-        self.params = np.linalg.inv(X.T @ X) @ X.T @ y
+        try:
+            self.params = np.linalg.inv(X.T @ X) @ X.T @ y
+        except np.linalg.LinAlgError as e:
+            self.params = np.random.normal(size=np.prod(self.params_dim)).reshape(self.params_dim)
+            print("maybe too small number of lines are provided, random parameter is generated;", e)
         return self
 
     def predict(self, X: np.ndarray):
@@ -111,11 +121,6 @@ class StairLineDetector:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         model.load_state_dict(torch.load(model_path, map_location=device), strict=True)
         self.model = model
-        self.regressor = RANSAC(
-            model=LinearRegressor(),
-            loss=square_error_loss,
-            metric=mean_square_error,
-        )
 
     def _pred_lines(self, img):
         """
@@ -142,30 +147,40 @@ class StairLineDetector:
         ]).reshape(-1, 1)
 
         # update regressor (adaptive inlier setting)
+        # n = max(1, int(rs.shape[0] / 4))  # parameter for the number of inliers
+        # d = max(1, int(rs.shape[0] / 4))  # parameter for the number of inliers
         n = int(rs.shape[0] / 4)  # parameter for the number of inliers
         d = int(rs.shape[0] / 4)  # parameter for the number of inliers
-        self.regressor.n = n
-        self.regressor.d = d
+        regressor = RANSAC(
+            n=n, d=d,
+            model=LinearRegressor(),
+            loss=square_error_loss,
+            metric=mean_square_error,
+        )
         # fitting regressor model
-        self.regressor.fit(rs, thetas)
-        lines_inlier = lines[self.regressor.inlier_indices]
+        regressor.fit(rs, thetas)
+
+        if regressor.inlier_indices is None:
+            lines_inlier = lines
+        else:
+            lines_inlier = lines[regressor.inlier_indices]
         return lines_inlier
 
     def pred_lines(self, img):
         lines = self._pred_lines(img)
         return self._filter_outlier_out(lines)
 
-    def postprocess_lines(self, lines):
-        thetas = np.array([
-            wraptopi(np.arctan2(l[3]-l[1], l[2]-l[0]) - 0.5*np.pi)
-            for l in lines
-        ])
-        # Removal of outliers
-        mean_theta = np.mean(thetas)
-        std_theta = np.std(thetas)
-        lines = lines[np.logical_and(thetas < mean_theta + 1*std_theta, thetas > mean_theta - 1*std_theta)]
-        return lines
-
+    # def postprocess_lines(self, lines):
+    #     thetas = np.array([
+    #         wraptopi(np.arctan2(l[3]-l[1], l[2]-l[0]) - 0.5*np.pi)
+    #         for l in lines
+    #     ])
+    #     # Removal of outliers
+    #     mean_theta = np.mean(thetas)
+    #     std_theta = np.std(thetas)
+    #     lines = lines[np.logical_and(thetas < mean_theta + 1*std_theta, thetas > mean_theta - 1*std_theta)]
+    #     return lines
+    #
     def visualise(self, img, lines, color=(0, 0, 256)):
         h, w, _ = img.shape  # height, width, channel
         img = cv2.resize(img, (512, 512))  # resize
@@ -285,7 +300,7 @@ if __name__ == "__main__":
     plt.scatter(X[regressor.inlier_indices], y[regressor.inlier_indices])
 
     line = np.linspace(np.min(X), np.max(X), num=100).reshape(-1, 1)
-    print(f"The best params are: {regressor.best_fit.params}")
+    # print(f"The best params are: {regressor.best_fit.params}")
     thetas_readable = wraptopi(-(thetas + 0.5*np.pi))  # human readable; x, y for left to right and down to up, resp.
     print(f"The predicted stair angle is: {np.mean(np.rad2deg(thetas_readable[regressor.inlier_indices]))} [deg]")
     plt.plot(line, regressor.predict(line), c="peru")
