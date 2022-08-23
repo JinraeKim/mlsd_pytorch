@@ -1,17 +1,16 @@
 from copy import copy
 import cv2
-import glob
-from pathlib import Path
 
 import numpy as np
-from numpy.random import default_rng
-rng = default_rng()
 
 # with M-LSD
-from models.mbv2_mlsd_tiny import  MobileV2_MLSD_Tiny
-# from models.mbv2_mlsd_large import  MobileV2_MLSD_Large
-from utils import  pred_lines
+from models.mbv2_mlsd_tiny import MobileV2_MLSD_Tiny
+# from models.mbv2_mlsd_large import MobileV2_MLSD_Large
+from utils import pred_lines
 import torch
+
+from numpy.random import default_rng
+rng = default_rng()
 
 
 class RANSAC:
@@ -40,11 +39,11 @@ class RANSAC:
             maybe_model = copy(self.model).fit(X[maybe_inliers], y[maybe_inliers])
 
             thresholded = (
-                self.loss(y[ids][self.n :], maybe_model.predict(X[ids][self.n :]))
+                self.loss(y[ids][self.n:], maybe_model.predict(X[ids][self.n:]))
                 < self.t
             )
 
-            inlier_ids = ids[self.n :][np.flatnonzero(thresholded).flatten()]
+            inlier_ids = ids[self.n:][np.flatnonzero(thresholded).flatten()]
 
             if inlier_ids.size > self.d:
                 inlier_ids_including_maybe = np.hstack([maybe_inliers, inlier_ids])
@@ -104,7 +103,7 @@ class StairLineDetector:
         # self.th2 = 200
         # self.th1 = 50
         # self.th2 = 100
-        model_path = "." +'/models/mlsd_tiny_512_fp32.pth'
+        model_path = "." + '/models/mlsd_tiny_512_fp32.pth'
         model = MobileV2_MLSD_Tiny().cuda().eval()
         # model_path = "." +'/models/mlsd_large_512_fp32.pth'
         # model = MobileV2_MLSD_Large().cuda().eval()
@@ -112,9 +111,16 @@ class StairLineDetector:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         model.load_state_dict(torch.load(model_path, map_location=device), strict=True)
         self.model = model
+        self.regressor = RANSAC(
+            model=LinearRegressor(),
+            loss=square_error_loss,
+            metric=mean_square_error,
+        )
 
-
-    def pred_lines(self, img):
+    def _pred_lines(self, img):
+        """
+        img: opencv img
+        """
         h, w, c = img.shape  # height, width, channel
         # DO NOT CHANGE THE ORDER OF CODE
         img = cv2.resize(img, (512, 512))  # resize
@@ -124,6 +130,30 @@ class StairLineDetector:
         img = cv2.resize(img, (w, h))  # re-resize
         # DO NOT CHANGE THE ORDER OF CODE
         return lines
+
+    def _filter_outlier_out(self, lines):
+        thetas = np.array([
+            wraptopi(np.arctan2(l[3]-l[1], l[2]-l[0]) - 0.5*np.pi)
+            for l in lines
+        ]).reshape(-1, 1)
+        rs = np.array([
+            l[0]*np.cos(theta) + l[1]*np.sin(theta)
+            for l, theta in zip(lines, thetas)
+        ]).reshape(-1, 1)
+
+        # update regressor (adaptive inlier setting)
+        n = int(rs.shape[0] / 4)  # parameter for the number of inliers
+        d = int(rs.shape[0] / 4)  # parameter for the number of inliers
+        self.regressor.n = n
+        self.regressor.d = d
+        # fitting regressor model
+        self.regressor.fit(rs, thetas)
+        lines_inlier = lines[self.regressor.inlier_indices]
+        return lines_inlier
+
+    def pred_lines(self, img):
+        lines = self._pred_lines(img)
+        return self._filter_outlier_out(lines)
 
     def postprocess_lines(self, lines):
         thetas = np.array([
@@ -136,13 +166,13 @@ class StairLineDetector:
         lines = lines[np.logical_and(thetas < mean_theta + 1*std_theta, thetas > mean_theta - 1*std_theta)]
         return lines
 
-    def visualise(self, img, lines, save_fig=True):
-        h, w, c = img.shape  # height, width, channel
+    def visualise(self, img, lines, color=(0, 0, 256)):
+        h, w, _ = img.shape  # height, width, channel
         img = cv2.resize(img, (512, 512))  # resize
         for l in lines:
             cv2.line(
                 img, (int(l[0]), int(l[1])), (int(l[2]), int(l[3])),
-                (0, 0, 256), 2,
+                color, 2,
             )
         img = cv2.resize(img, (w, h))  # re-resize
         return img
@@ -213,11 +243,17 @@ if __name__ == "__main__":
 
     detector = StairLineDetector()
     t0 = time.time()
-    lines = detector.pred_lines(img)
+    lines = detector._pred_lines(img)
     t1 = time.time()
-    print(f"line prediction time: {t1-t0}s")
+    print(f"_pred_lines time: {t1-t0}s")
+
+    t0 = time.time()
+    lines_inlier = detector._filter_outlier_out(lines)
+    t1 = time.time()
+    print(f"_filter_outlier_out time: {t1-t0}s")
     # _, lines = detector.find_edges_and_lines(img)
     img = detector.visualise(img, lines)
+    img = detector.visualise(img, lines_inlier, color=(256, 0, 0))
     cv2.imwrite(file[:-4] + "_with_lines" + file[-4:], img)
     # lines = detector.postprocess_lines(lines)
 
@@ -238,10 +274,7 @@ if __name__ == "__main__":
     d = int(rs.shape[0] / 4)  # parameter for the number of inliers
     regressor = RANSAC(n=n, d=d, model=LinearRegressor(), loss=square_error_loss, metric=mean_square_error)
     X, y = rs, thetas
-    t0 = time.time()
     regressor.fit(X, y)
-    t1 = time.time()
-    print(f"fitting time: {t1-t0}s")
 
     import matplotlib.pyplot as plt
     plt.style.use("seaborn-darkgrid")
