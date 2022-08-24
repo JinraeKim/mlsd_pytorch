@@ -192,6 +192,7 @@ class StairLineDetector:
         return (point - vertical_component)
 
     def create_line_iterator(self, P1, P2, img):
+        # TODO: move it to ./stair_line_detector_ros.py
         """
         Produces an array that consists of the coordinates and intensities of each pixel in a line between two points
 
