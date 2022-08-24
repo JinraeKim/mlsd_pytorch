@@ -33,6 +33,8 @@ class StairLineDetectorROS:
             cv_depth = self.bridge.imgmsg_to_cv2(depth_data, "16UC1")
         except CvBridgeError as e:
             print(e)
+        # (rows, cols, channels) = cv_image.shape
+
         # lines = self.stair_line_detector.detect_lines(cv_image)
         # cv_image = self.stair_line_detector.visualise(cv_image, lines, color=(255, 0, 0))
 
@@ -43,29 +45,30 @@ class StairLineDetectorROS:
         line_iterator = self.create_line_iterator(lines[0][0:2], lines[0][2:4], cv_depth)
         cv_image = self.stair_line_detector.visualise(cv_image, _lines)
         cv_image = self.stair_line_detector.visualise(cv_image, lines, color=(255, 0, 0))
-
-        proj_lines = self._get_proj_lines(line_iterator, K)
-        image_dummy = np.zeros(shape=cv_image.shape, dtype=np.uint8)
-        image_dummy[:] = (0, 0, 0)
-        for i in range(proj_lines.shape[0]):
-            cv2.circle(
-                image_dummy,
-                (int(proj_lines[i, 0]), int(proj_lines[i, 1])),
-                radius=0, color=(255, 255, 255), thickness=-1,
-            )
-        # (rows, cols, channels) = cv_image.shape
         try:
             self.image_pub.publish(self.bridge.cv2_to_imgmsg(cv_image, "bgr8"))
         except CvBridgeError as e:
             print(e)
-        try:
-            self.tmp_pub.publish(self.bridge.cv2_to_imgmsg(image_dummy, "bgr8"))
-        except CvBridgeError as e:
-            print(e)
 
-    def _get_proj_lines(self, line_iterator, K):
+        # proj_lines = self._get_proj_lines(line_iterator, K)
+        # for i in range(proj_lines.shape[0]):
+        #     cv2.circle(
+        #         image_dummy,
+        #         (int(proj_lines[i, 0]), int(proj_lines[i, 1])),
+        #         radius=0, color=(255, 255, 255), thickness=-1,
+        #     )
+        # image_dummy = np.zeros(shape=cv_image.shape, dtype=np.uint8)
+        # image_dummy[:] = (0, 0, 0)
+        # try:
+        #     self.tmp_pub.publish(self.bridge.cv2_to_imgmsg(image_dummy, "bgr8"))
+        # except CvBridgeError as e:
+        #     print(e)
+        pcd = self._get_point_cloud(line_iterator, K)
+        print(pcd.shape)
+
+    def _get_point_cloud(self, line_iterator, K):
         """
-        Obtain lines projected onto xy plane from a line_iterator.
+        Obtain point cloud from line_iterator with depth data.
 
         Inputs:
             - line_iterator: line iterator from `N` lines on an image.
@@ -76,9 +79,9 @@ class StairLineDetectorROS:
             - K: intrinsic camera matrix [1, 3]
                 - Size: 3x3
         Outputs:
-            - proj_lines: the corresponding projected lines.
+            - pcd: obtained point cloud
                 - Size: N x 3
-                - proj_lines[i, :] = (x, y) for point cloud (x, y, z) in 3D space [1, 2]
+                - pcd[i, :] = (x, y, z) in 3D space [1, 2]
         Notes:
             - The formula is based on [Eq. (2), 1].
             - The frame defined in 3D space for point cloud corresponds to homogenous coordinates, see [Fig. 1a, 2].
@@ -88,14 +91,25 @@ class StairLineDetectorROS:
             [3] http://docs.ros.org/en/melodic/api/sensor_msgs/html/msg/CameraInfo.html
         """
         N = line_iterator.shape[0]
-        proj_lines = np.empty(shape=(line_iterator.shape[0], 2))
-        proj_lines.fill(np.nan)
+        pcd = np.empty(shape=(line_iterator.shape[0], 3))
+        pcd.fill(np.nan)
         K_inv = np.linalg.inv(K)
         for i in range(N):
             u, v, d = line_iterator[i, :]
             p_tilde = np.array([u, v, 1.0])
             P = d * K_inv @ p_tilde
-            proj_lines[i, :] = P[0:2]  # assumption: camera frame's roll&pitch are zero
+            pcd[i, :] = P  # assumption: camera frame's roll&pitch are zero
+        return pcd
+
+    def _get_proj_lines(self, line_iterator, K):
+        """
+        Obtain lines projected onto xy plane from a line_iterator.
+
+        Assumption:
+            - [A1] roll/pitch of the camera frame w.r.t. fixed frame are zero.
+        """
+        pcd = self._get_point_cloud(line_iterator, K)
+        proj_lines = pcd[:, 0:2]  # (x, y, z) -> (x, y) [A1]
         return proj_lines
 
     # def _project_onto_plane(self, point, normal):
@@ -116,6 +130,7 @@ class StairLineDetectorROS:
     #     return (point - vertical_component)
     #
     def create_line_iterator(self, P1, P2, img):
+        # TODO: line should be from the original img, not (512, 512).
         """
         Produces an array that consists of the coordinates and intensities of each pixel in a line between two points
 
