@@ -18,7 +18,6 @@ class RANSAC:
     Borrowed from https://en.wikipedia.org/wiki/Random_sample_consensus#Example_Code.
     The computation time will be proportional to `k`.
     """
-    # def __init__(self, n=10, k=100, t=0.05, d=10, model=None, loss=None, metric=None):
     def __init__(self, n=10, k=100, t=0.05, d=10, model=None, loss=None, metric=None):
         self.n = n              # `n`: Minimum number of data points to estimate parameters
         self.k = k              # `k`: Maximum iterations allowed
@@ -38,7 +37,6 @@ class RANSAC:
         else:
             for _ in range(self.k):
                 ids = self.rng.permutation(X.shape[0])
-                # n = min(self.n, len(ids))
                 n = self.n
 
                 maybe_inliers = ids[:n]
@@ -109,10 +107,6 @@ class StairLineDetector:
         """
         `regressor` is a RANSAC regressor.
         """
-        # self.th1 = 50
-        # self.th2 = 200
-        # self.th1 = 50
-        # self.th2 = 100
         model_path = "." + '/models/mlsd_tiny_512_fp32.pth'
         model = MobileV2_MLSD_Tiny().cuda().eval()
         # model_path = "." +'/models/mlsd_large_512_fp32.pth'
@@ -121,16 +115,17 @@ class StairLineDetector:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         model.load_state_dict(torch.load(model_path, map_location=device), strict=True)
         self.model = model
+        self.img_size_for_inference = (512, 512)
 
-    def _pred_lines(self, img):
+    def _detect_lines(self, img):
         """
         img: opencv img
         """
         h, w, c = img.shape  # height, width, channel
         # DO NOT CHANGE THE ORDER OF CODE
-        img = cv2.resize(img, (512, 512))  # resize
+        img = cv2.resize(img, self.img_size_for_inference)  # resize
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        lines = pred_lines(img, self.model, [512, 512], 0.1, 20)
+        lines = pred_lines(img, self.model, self.img_size_for_inference, 0.1, 20)
         img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
         img = cv2.resize(img, (w, h))  # re-resize
         # DO NOT CHANGE THE ORDER OF CODE
@@ -147,8 +142,6 @@ class StairLineDetector:
         ]).reshape(-1, 1)
 
         # update regressor (adaptive inlier setting)
-        # n = max(1, int(rs.shape[0] / 4))  # parameter for the number of inliers
-        # d = max(1, int(rs.shape[0] / 4))  # parameter for the number of inliers
         n = int(rs.shape[0] / 4)  # parameter for the number of inliers
         d = int(rs.shape[0] / 4)  # parameter for the number of inliers
         regressor = RANSAC(
@@ -166,24 +159,13 @@ class StairLineDetector:
             lines_inlier = lines[regressor.inlier_indices]
         return lines_inlier
 
-    def pred_lines(self, img):
-        lines = self._pred_lines(img)
+    def detect_lines(self, img):
+        lines = self._detect_lines(img)
         return self._filter_outlier_out(lines)
 
-    # def postprocess_lines(self, lines):
-    #     thetas = np.array([
-    #         wraptopi(np.arctan2(l[3]-l[1], l[2]-l[0]) - 0.5*np.pi)
-    #         for l in lines
-    #     ])
-    #     # Removal of outliers
-    #     mean_theta = np.mean(thetas)
-    #     std_theta = np.std(thetas)
-    #     lines = lines[np.logical_and(thetas < mean_theta + 1*std_theta, thetas > mean_theta - 1*std_theta)]
-    #     return lines
-    #
-    def visualise(self, img, lines, color=(0, 0, 256)):
+    def visualise(self, img, lines, color=(0, 0, 255)):
         h, w, _ = img.shape  # height, width, channel
-        img = cv2.resize(img, (512, 512))  # resize
+        img = cv2.resize(img, self.img_size_for_inference)  # resize
         for l in lines:
             cv2.line(
                 img, (int(l[0]), int(l[1])), (int(l[2]), int(l[3])),
@@ -192,47 +174,113 @@ class StairLineDetector:
         img = cv2.resize(img, (w, h))  # re-resize
         return img
 
-    # def find_edges_and_lines(self, img):
-    #     """
-    #     Input:
-    #         img: cv2 image, e.g., `img = cv2.imread(file)`
-    #     Output:
-    #         lines: not line segmentations, just lines
-    #     """
-    #     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    #     edges = cv2.Canny(
-    #         gray, self.th1, self.th2,
-    #         apertureSize = 3,
-    #     )
-    #     # lines = cv2.HoughLines(edges, 1, np.pi/180, 100)
-    #     lines = cv2.HoughLines(edges, 1, np.pi/180, 150)
-    #     # lines = cv2.HoughLinesP(
-    #     #     edges, 1, np.pi/180, 80, 30, 1,
-    #     # )  # NOTE: HoughLinesP didn't work well
-    #     return edges, lines
+    def project_onto_plane(self, point, normal):
+        """
+        Project a vector `point` in 3D space
+        to a plane whose normal vector is `normal`.
+        Variables:
+            point = [x, y, z]
+            normal = [u, v, w]
+        Notes:
+            - The plane contains the origin with normal vector of `normal`.
+            - This is for yaw angle estimation (see ROS app of this class).
+        Refs:
+            https://en.wikipedia.org/wiki/Vector_projection
+        """
+        normal_unit = normal / np.linalg.norm(normal)
+        vertical_component = np.dot(point, normal_unit) * normal_unit
+        return (point - vertical_component)
 
-    # def visualise(self, img, save_fig=True):
-    #     """
-    #     CAUTION: it will override `img`.
-    #     """
-    #     edges, lines = self.find_edges_and_lines(img)
-    #     for line in lines:
-    #         for r, theta in line:  # for HoughLines
-    #             a, b = np.cos(theta), np.sin(theta)
-    #             x0 = r * a
-    #             y0 = r * b
-    #             x1 = int(x0 + 1000*(-b))
-    #             y1 = int(y0 + 1000*(a))
-    #             x2 = int(x0 - 1000*(-b))
-    #             y2 = int(y0 - 1000*(a))
-    #             cv2.line(img, (x1, y1), (x2, y2), (0, 0, 255), 2)
-    #         # for x1, x2, y1, y2 in line:  # for HoughLinesP
-    #         #     cv2.line(img, (x1,y1), (x2,y2), (0,0,255), 2)
-    #     if save_fig:
-    #         # save_file = "line_" + file
-    #         # Path(save_file).parents[0].mkdir(exist_ok=True, parents=True)
-    #         cv2.imwrite("lines.png", img)
-    #         cv2.imwrite("edges.png", edges)
+    def create_line_iterator(self, P1, P2, img):
+        """
+        Produces an array that consists of the coordinates and intensities of each pixel in a line between two points
+
+        Parameters:
+            -P1: a numpy array that consists of the coordinate of the first point (x, y)
+            -P2: a numpy array that consists of the coordinate of the second point (x, y)
+            -img: the image being processed
+        Returns:
+            -it: a numpy array that consists of the coordinates and intensities of each pixel in the radii (shape: [numPixels, 3], row = [x, y, intensity])
+        Notes:
+            Modified from [1]
+        Refs:
+            [1] https://stackoverflow.com/a/32857432
+        """
+        # define local variables for readability
+        imageH = img.shape[0]
+        imageW = img.shape[1]
+        P1X = P1[0]
+        P1Y = P1[1]
+        P2X = P2[0]
+        P2Y = P2[1]
+        # # projection
+        P1X = np.array(int(P1X))
+        P1Y = np.array(int(P1Y))
+        P2X = np.array(int(P2X))
+        P2Y = np.array(int(P2Y))
+
+        # difference and absolute difference between points
+        # used to calculate slope and relative location between points
+        dX = P2X - P1X
+        dY = P2Y - P1Y
+        dXa = np.abs(dX)
+        dYa = np.abs(dY)
+
+        # predefine numpy array for output based on distance between points
+        itbuffer = np.empty(shape=(np.maximum(dYa, dXa), 3), dtype=np.float32)
+        # itbuffer = np.empty(shape=(np.maximum(dYa, dXa)+1, 3), dtype=np.float32)
+        itbuffer.fill(np.nan)
+
+        # Obtain coordinates along the line using a form of Bresenham's algorithm
+        negY = P1Y > P2Y
+        negX = P1X > P2X
+        if P1X == P2X:  # vertical line segment
+            itbuffer[:, 0] = P1X
+            if negY:
+                itbuffer[:, 1] = np.arange(P1Y-1, P1Y-dYa-1, -1)
+                # itbuffer[:, 1] = np.arange(P1Y, P1Y-dYa-1, -1)
+            else:
+                itbuffer[:, 1] = np.arange(P1Y+1, P1Y+dYa + 1)
+                # itbuffer[:, 1] = np.arange(P1Y, P1Y+dYa+1)
+        elif P1Y == P2Y:  # horizontal line segment
+            itbuffer[:, 1] = P1Y
+            if negX:
+                itbuffer[:, 0] = np.arange(P1X-1, P1X-dXa-1, -1)
+                # itbuffer[:, 0] = np.arange(P1X, P1X-dXa-1, -1)
+            else:
+                itbuffer[:, 0] = np.arange(P1X+1, P1X+dXa+1)
+                # itbuffer[:, 0] = np.arange(P1X, P1X+dXa+1)
+        else:  # diagonal line segment
+            steepSlope = dYa > dXa
+            if steepSlope:
+                slope = dX.astype(np.float32)/dY.astype(np.float32)
+                if negY:
+                    itbuffer[:, 1] = np.arange(P1Y-1, P1Y-dYa-1, -1)
+                    # itbuffer[:, 1] = np.arange(P1Y-1, P1Y-dYa-1, -1)
+                else:
+                    itbuffer[:, 1] = np.arange(P1Y+1, P1Y+dYa+1)
+                    # itbuffer[:, 1] = np.arange(P1Y+1, P1Y+dYa+1)
+                itbuffer[:, 0] = (slope*(itbuffer[:, 1]-P1Y)).astype(np.int) + P1X
+                # itbuffer[:, 0] = (slope*(itbuffer[:, 1]-P1Y+1)).astype(np.int) + P1X
+            else:
+                slope = dY.astype(np.float32)/dX.astype(np.float32)
+                if negX:
+                    itbuffer[:, 0] = np.arange(P1X-1, P1X-dXa-1, -1)
+                    # itbuffer[:, 0] = np.arange(P1X, P1X-dXa-1, -1)
+                else:
+                    itbuffer[:, 0] = np.arange(P1X+1, P1X+dXa+1)
+                    # itbuffer[:, 0] = np.arange(P1X, P1X+dXa+1)
+                itbuffer[:, 1] = (slope*(itbuffer[:, 0]-P1X)).astype(np.int) + P1Y
+                # itbuffer[:, 1] = (slope*(itbuffer[:, 0]-P1X+1)).astype(np.int) + P1Y
+
+        # Remove points outside of image
+        colX = itbuffer[:, 0]
+        colY = itbuffer[:, 1]
+        itbuffer = itbuffer[(colX >= 0) & (colY >= 0) & (colX < imageW) & (colY < imageH)]
+
+        # Get intensities from img ndarray
+        itbuffer[:, 2] = img[itbuffer[:, 1].astype(np.uint), itbuffer[:, 0].astype(np.uint)]
+        return itbuffer
 
 
 if __name__ == "__main__":
@@ -240,7 +288,7 @@ if __name__ == "__main__":
     Author:
         Jinrae Kim
     Basic idea:
-        when lines are detected, one can represent them with
+        When lines are detected, one can represent them with
         `r` and `theta` (Polar coordinate).
         If the lines are obtained from stairs, there may be many parallel lines.
         Then, there would be a command `theta` among those lines.
@@ -258,9 +306,9 @@ if __name__ == "__main__":
 
     detector = StairLineDetector()
     t0 = time.time()
-    lines = detector._pred_lines(img)
+    lines = detector._detect_lines(img)
     t1 = time.time()
-    print(f"_pred_lines time: {t1-t0}s")
+    print(f"_detect_lines time: {t1-t0}s")
 
     t0 = time.time()
     lines_inlier = detector._filter_outlier_out(lines)
@@ -268,7 +316,7 @@ if __name__ == "__main__":
     print(f"_filter_outlier_out time: {t1-t0}s")
     # _, lines = detector.find_edges_and_lines(img)
     img = detector.visualise(img, lines)
-    img = detector.visualise(img, lines_inlier, color=(256, 0, 0))
+    img = detector.visualise(img, lines_inlier, color=(255, 0, 0))
     cv2.imwrite(file[:-4] + "_with_lines" + file[-4:], img)
     # lines = detector.postprocess_lines(lines)
 
@@ -280,9 +328,6 @@ if __name__ == "__main__":
         l[0]*np.cos(theta) + l[1]*np.sin(theta)
         for l, theta in zip(lines, thetas)
     ]).reshape(-1, 1)
-
-    # rs = np.array([line[0][0] for line in lines]).reshape(-1, 1)
-    # thetas = np.array([line[0][1] for line in lines]).reshape(-1, 1)
 
     # regression
     n = int(rs.shape[0] / 4)  # parameter for the number of inliers
