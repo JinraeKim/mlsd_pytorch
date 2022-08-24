@@ -27,8 +27,13 @@ class StairLineDetectorROS:
             cv_image = self.bridge.imgmsg_to_cv2(image_data, "bgr8")
         except CvBridgeError as e:
             print(e)
-        lines = self.stair_line_detector.pred_lines(cv_image)
-        cv_image = self.stair_line_detector.visualise(cv_image, lines)
+        # lines = self.stair_line_detector.pred_lines(cv_image)
+        # cv_image = self.stair_line_detector.visualise(cv_image, lines, color=(256, 0, 0))
+
+        _lines = self.stair_line_detector._pred_lines(cv_image)
+        lines = self.stair_line_detector._filter_outlier_out(_lines)
+        cv_image = self.stair_line_detector.visualise(cv_image, _lines)
+        cv_image = self.stair_line_detector.visualise(cv_image, lines, color=(256, 0, 0))
 
         # (rows, cols, channels) = cv_image.shape
         try:
