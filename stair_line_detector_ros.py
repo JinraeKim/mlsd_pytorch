@@ -66,7 +66,7 @@ class StairLineDetectorROS:
         points_iterators = [
             read_points(
                 pcd,
-                # field_names=["x", "y", "z"],
+                field_names=["x", "y", "z"],
                 uvs=line_iterator,
                 # uvs=[[p[0], p[1]] for p in line_iterator],
                 skip_nans=True,
@@ -93,8 +93,8 @@ class StairLineDetectorROS:
                 line_points_number += len(li)
             print("lines_points", line_points_number)
             # points_all = list(set(points_all))
-            # pcd_all = create_cloud_xyz32(pcd.header, points_all)
-            pcd_all = create_cloud(pcd.header, pcd.fields, points_all)
+            pcd_all = create_cloud_xyz32(pcd.header, points_all)
+            # pcd_all = create_cloud(pcd.header, pcd.fields, points_all)
             self.pcd_pub.publish(pcd_all)
         import pdb; pdb.set_trace()
 
