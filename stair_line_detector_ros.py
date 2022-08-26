@@ -5,112 +5,144 @@ import numpy as np
 import sys
 import rospy
 import cv2
-from sensor_msgs.msg import Image, CameraInfo
+from sensor_msgs.msg import Image, PointCloud2
+from sensor_msgs.point_cloud2 import create_cloud, create_cloud_xyz32, read_points
 from cv_bridge import CvBridge, CvBridgeError
 import message_filters
 from stair_line_detector import StairLineDetector
 
 
 class StairLineDetectorROS:
-    def __init__(self):
-        self.image_pub = rospy.Publisher("image_topic_lines", Image)
-        self.tmp_pub = rospy.Publisher("image_topic_tmp", Image)
-
-        self.bridge = CvBridge()
-        self.image_sub = message_filters.Subscriber("/camera/color/image_raw", Image)
-        self.image_camera_info_sub = message_filters.Subscriber("/camera/color/camera_info", CameraInfo)
-        self.depth_sub = message_filters.Subscriber("/camera/aligned_depth_to_color/image_raw", Image)
-        self.image_depth_sync = message_filters.TimeSynchronizer([self.image_sub, self.image_camera_info_sub, self.depth_sub], 10)
-        self.image_depth_sync.registerCallback(self.callback)
+    def __init__(self, visualisation=True):
         self.stair_line_detector = StairLineDetector()
+        self.bridge = CvBridge()
+        self.visualisation = visualisation
 
-    def callback(self, image_data, image_camera_info, depth_data):
+        self.color_pub = rospy.Publisher("/camera/color/image_raw_with_lines", Image)
+        self.pcd_pub = rospy.Publisher("/camera/depth/color/points_lines", PointCloud2)
+
+        self.color_sub = message_filters.Subscriber("/camera/color/image_raw", Image)
+        self.pcd_sub = message_filters.Subscriber("/camera/depth/color/points", PointCloud2)
+
+        self.sync_sub = message_filters.TimeSynchronizer([self.color_sub, self.pcd_sub], 10)
+        self.sync_sub.registerCallback(self.callback)
+
+    def callback(self, color_data, pcd):
         try:
-            cv_image = self.bridge.imgmsg_to_cv2(image_data, "bgr8")
+            cv_color = self.bridge.imgmsg_to_cv2(color_data, "bgr8")
         except CvBridgeError as e:
             print(e)
-        try:
-            cv_depth = self.bridge.imgmsg_to_cv2(depth_data, "16UC1")
-        except CvBridgeError as e:
-            print(e)
-        # (rows, cols, channels) = cv_image.shape
+        (rows, cols, channels) = cv_color.shape
 
-        # lines = self.stair_line_detector.detect_lines(cv_image)
-        # cv_image = self.stair_line_detector.visualise(cv_image, lines, color=(255, 0, 0))
+        # lines = self.stair_line_detector.detect_lines(cv_color)
+        # cv_color = self.stair_line_detector.visualise(cv_color, lines, color=(255, 0, 0))
 
-        K = np.array(image_camera_info.K).reshape(3, 3)
-
-        _lines = self.stair_line_detector._detect_lines(cv_image)
+        _lines = self.stair_line_detector._detect_lines(cv_color)
         lines = self.stair_line_detector._filter_outlier_out(_lines)
-        line_iterator = self.create_line_iterator(lines[0][0:2], lines[0][2:4], cv_depth)
-        cv_image = self.stair_line_detector.visualise(cv_image, _lines)
-        cv_image = self.stair_line_detector.visualise(cv_image, lines, color=(255, 0, 0))
-        try:
-            self.image_pub.publish(self.bridge.cv2_to_imgmsg(cv_image, "bgr8"))
-        except CvBridgeError as e:
-            print(e)
+        lines = [lines[-1]]  # TODO: change this
+        line_iterators = [
+            self.create_line_iterator(line[0:2], line[2:4], cv_color)
+            for line in lines
+        ]
+        # for li in line_iterators:
+        #     inflated_lis = []
+        #     for inflation in [
+        #             [+3, 0], [+2, 0], [+1, 0], [-1, 0], [-2, 0], [-3, 0],
+        #             [0, +3], [0, +2], [0, +1], [0, -1], [0, -2], [0, -3],
+        #             [+2, +1], [+2, +2], [+1, +2], [+1, +1],
+        #             [+2, -1], [+2, -2], [+1, -2], [+1, -1],
+        #             [-2, +1], [-2, +2], [-1, +2], [-1, +1],
+        #             [-2, -1], [-2, -2], [-1, -2], [-1, -1],
+        #     ]:
+        #         inflated_lis.append([list(inflated) for inflated in np.array(li)+inflation])
+        #     for inflated_li in inflated_lis:
+        #         li = li + inflated_li
+        # # TODO: remove it
+        # line_iterators = [[]]
+        # for i in range(int(rows/4)):
+        #     for j in range(int(cols/4)):
+        #         line_iterators[0].append([i, j])
+        # # TODO: remove it
+        points_iterators = [
+            read_points(
+                pcd,
+                # field_names=["x", "y", "z"],
+                uvs=line_iterator,
+                # uvs=[[p[0], p[1]] for p in line_iterator],
+                skip_nans=True,
+            )
+            for line_iterator in line_iterators
+        ]
+        if self.visualisation:
+            # lines
+            cv_color = self.stair_line_detector.visualise(cv_color, _lines, color=(0, 0, 255))  # red
+            cv_color = self.stair_line_detector.visualise(cv_color, lines, color=(255, 0, 0))  # blue
+            try:
+                self.color_pub.publish(self.bridge.cv2_to_imgmsg(cv_color, "bgr8"))
+            except CvBridgeError as e:
+                print(e)
 
-        # proj_lines = self._get_proj_lines(line_iterator, K)
-        # for i in range(proj_lines.shape[0]):
-        #     cv2.circle(
-        #         image_dummy,
-        #         (int(proj_lines[i, 0]), int(proj_lines[i, 1])),
-        #         radius=0, color=(255, 255, 255), thickness=-1,
-        #     )
-        # image_dummy = np.zeros(shape=cv_image.shape, dtype=np.uint8)
-        # image_dummy[:] = (0, 0, 0)
-        # try:
-        #     self.tmp_pub.publish(self.bridge.cv2_to_imgmsg(image_dummy, "bgr8"))
-        # except CvBridgeError as e:
-        #     print(e)
-        pcd = self._get_point_cloud(line_iterator, K)
-        print(pcd.shape)
+            # pointclouds
+            points_all = []
+            for pi in points_iterators:
+                points_all = points_all + list(pi)
+            print("points", len(points_all))
+            print("lines", len(line_iterators))
+            line_points_number = 0
+            for li in line_iterators:
+                line_points_number += len(li)
+            print("lines_points", line_points_number)
+            # points_all = list(set(points_all))
+            # pcd_all = create_cloud_xyz32(pcd.header, points_all)
+            pcd_all = create_cloud(pcd.header, pcd.fields, points_all)
+            self.pcd_pub.publish(pcd_all)
+        import pdb; pdb.set_trace()
 
-    def _get_point_cloud(self, line_iterator, K):
-        """
-        Obtain point cloud from line_iterator with depth data.
-
-        Inputs:
-            - line_iterator: line iterator from `N` lines on an image.
-                - Size: N x 3
-                - line_iterator[i, :] = (u, v, d)
-                    - (u, v, 1): homogenous coordinates [1]
-                    - d: depth [1]
-            - K: intrinsic camera matrix [1, 3]
-                - Size: 3x3
-        Outputs:
-            - pcd: obtained point cloud
-                - Size: N x 3
-                - pcd[i, :] = (x, y, z) in 3D space [1, 2]
-        Notes:
-            - The formula is based on [Eq. (2), 1].
-            - The frame defined in 3D space for point cloud corresponds to homogenous coordinates, see [Fig. 1a, 2].
-        Refs:
-            [1] I. Vasiljevic et al., “Neural Ray Surfaces for Self-Supervised Learning of Depth and Ego-motion.” arXiv, Aug. 14, 2020. Accessed: Aug. 24, 2022. [Online]. Available: http://arxiv.org/abs/2008.06630
-            [2] D. Rosebrock and F. M. Wahl, “Generic camera calibration and modeling using spline surfaces,” in 2012 IEEE Intelligent Vehicles Symposium, Alcal de Henares , Madrid, Spain, Jun. 2012, pp. 51–56. doi: 10.1109/IVS.2012.6232156.
-            [3] http://docs.ros.org/en/melodic/api/sensor_msgs/html/msg/CameraInfo.html
-        """
-        N = line_iterator.shape[0]
-        pcd = np.empty(shape=(line_iterator.shape[0], 3))
-        pcd.fill(np.nan)
-        K_inv = np.linalg.inv(K)
-        for i in range(N):
-            u, v, d = line_iterator[i, :]
-            p_tilde = np.array([u, v, 1.0])
-            P = d * K_inv @ p_tilde
-            pcd[i, :] = P  # assumption: camera frame's roll&pitch are zero
-        return pcd
-
-    def _get_proj_lines(self, line_iterator, K):
-        """
-        Obtain lines projected onto xy plane from a line_iterator.
-
-        Assumption:
-            - [A1] roll/pitch of the camera frame w.r.t. fixed frame are zero.
-        """
-        pcd = self._get_point_cloud(line_iterator, K)
-        proj_lines = pcd[:, 0:2]  # (x, y, z) -> (x, y) [A1]
-        return proj_lines
+    # def _get_point_cloud(self, line_iterator, K):
+    #     """
+    #     Obtain point cloud from line_iterator with depth data.
+    #
+    #     Inputs:
+    #         - line_iterator: line iterator from `N` lines on an image.
+    #             - Size: N x 3
+    #             - line_iterator[i, :] = (u, v, d)
+    #                 - (u, v, 1): homogenous coordinates [1]
+    #                 - d: depth [1]
+    #         - K: intrinsic camera matrix [1, 3]
+    #             - Size: 3x3
+    #     Outputs:
+    #         - pcd: obtained point cloud
+    #             - Size: N x 3
+    #             - pcd[i, :] = (x, y, z) in 3D space [1, 2]
+    #     Notes:
+    #         - The formula is based on [Eq. (2), 1].
+    #         - The frame defined in 3D space for point cloud corresponds to homogenous coordinates, see [Fig. 1a, 2].
+    #     Refs:
+    #         [1] I. Vasiljevic et al., “Neural Ray Surfaces for Self-Supervised Learning of Depth and Ego-motion.” arXiv, Aug. 14, 2020. Accessed: Aug. 24, 2022. [Online]. Available: http://arxiv.org/abs/2008.06630
+    #         [2] D. Rosebrock and F. M. Wahl, “Generic camera calibration and modeling using spline surfaces,” in 2012 IEEE Intelligent Vehicles Symposium, Alcal de Henares , Madrid, Spain, Jun. 2012, pp. 51–56. doi: 10.1109/IVS.2012.6232156.
+    #         [3] http://docs.ros.org/en/melodic/api/sensor_msgs/html/msg/CameraInfo.html
+    #     """
+    #     N = line_iterator.shape[0]
+    #     pcd = np.empty(shape=(line_iterator.shape[0], 3))
+    #     pcd.fill(np.nan)
+    #     K_inv = np.linalg.inv(K)
+    #     for i in range(N):
+    #         u, v, d = line_iterator[i, :]
+    #         p_tilde = np.array([u, v, 1.0])
+    #         P = d * K_inv @ p_tilde
+    #         pcd[i, :] = P  # assumption: camera frame's roll&pitch are zero
+    #     return pcd
+    #
+    # def _get_proj_lines(self, line_iterator, K):
+    #     """
+    #     Obtain lines projected onto xy plane from a line_iterator.
+    #
+    #     Assumption:
+    #         - [A1] roll/pitch of the camera frame w.r.t. fixed frame are zero.
+    #     """
+    #     pcd = self._get_point_cloud(line_iterator, K)
+    #     proj_lines = pcd[:, 0:2]  # (x, y, z) -> (x, y) [A1]
+    #     return proj_lines
 
     # def _project_onto_plane(self, point, normal):
     #     """
@@ -129,17 +161,16 @@ class StairLineDetectorROS:
     #     vertical_component = np.dot(point, normal_unit) * normal_unit
     #     return (point - vertical_component)
     #
-    def create_line_iterator(self, P1, P2, img):
-        # TODO: line should be from the original img, not (512, 512).
+    def create_line_iterator(self, P1, P2, img, stride=None):
+        # NOTE: line should be from the original img, not (512, 512).
         """
         Produces an array that consists of the coordinates and intensities of each pixel in a line between two points
 
         Parameters:
             -P1: a numpy array that consists of the coordinate of the first point (x, y)
             -P2: a numpy array that consists of the coordinate of the second point (x, y)
-            -img: the image being processed
         Returns:
-            -it: a numpy array that consists of the coordinates and intensities of each pixel in the radii (shape: [numPixels, 3], row = [x, y, intensity])
+            -it: a numpy array that consists of the coordinates of each pixel in the radii (shape: [numPixels, 2], row = [x, y])
         Notes:
             Modified from [1]
         Refs:
@@ -166,9 +197,9 @@ class StairLineDetectorROS:
         dYa = np.abs(dY)
 
         # predefine numpy array for output based on distance between points
-        itbuffer = np.empty(shape=(np.maximum(dYa, dXa), 3), dtype=np.float32)
+        itbuffer = np.empty(shape=(np.maximum(dYa, dXa), 2), dtype=np.uint16)
         # itbuffer = np.empty(shape=(np.maximum(dYa, dXa)+1, 3), dtype=np.float32)
-        itbuffer.fill(np.nan)
+        # itbuffer.fill(np.nan)
 
         # Obtain coordinates along the line using a form of Bresenham's algorithm
         negY = P1Y > P2Y
@@ -218,12 +249,32 @@ class StairLineDetectorROS:
         itbuffer = itbuffer[(colX >= 0) & (colY >= 0) & (colX < imageW) & (colY < imageH)]
 
         # Get intensities from img ndarray
-        itbuffer[:, 2] = img[itbuffer[:, 1].astype(np.uint), itbuffer[:, 0].astype(np.uint)]
-        return itbuffer
+        # itbuffer[:, 2] = img[itbuffer[:, 1].astype(np.uint), itbuffer[:, 0].astype(np.uint)]
+        line_iterator = [list(itbuffer[i, :]) for i in range(itbuffer.shape[0])]
+        if stride is not None:
+            line_iterator = self._inflate_line_iterator(line_iterator, stride)
+        return line_iterator
+
+    def _inflate_line_iterator(self, line_iterator, stride: int = 3):
+        """
+        NOTE: it takes too long time
+        """
+        if stride <= 0.0 or stride % 2 != 1:
+            raise ValueError("Invalid inflation stride")
+        else:
+            for index in line_iterator:
+                for _i in range(stride):
+                    for _j in range(stride):
+                        i = _i - int((stride-1)/2)
+                        j = _j - int((stride-1)/2)
+                        new_index = [index[0]+i, index[1]+j]
+                        if new_index not in line_iterator:
+                            line_iterator.append(new_index)
+        return line_iterator
 
 
 def main(args):
-    ids = StairLineDetectorROS()
+    sdros = StairLineDetectorROS()
     rospy.init_node('image_depth_synchronise', anonymous=True)
     try:
         rospy.spin()
