@@ -119,9 +119,11 @@ class StairLineDetector:
 
     def _detect_lines(self, img):
         """
-        img: opencv img
+        img: opencv color img
+        lines: predicted lines.
         """
-        h, w, c = img.shape  # height, width, channel
+        # TODO: CHANGE THE CODE; DO NOT RESIZE IMAGES BEFORE/AFTER `pred_lines`!!!
+        h, w, _ = img.shape  # height, width, channel
         # DO NOT CHANGE THE ORDER OF CODE
         img = cv2.resize(img, self.img_size_for_inference)  # resize
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
@@ -164,6 +166,7 @@ class StairLineDetector:
         return self._filter_outlier_out(lines)
 
     def visualise(self, img, lines, color=(0, 0, 255)):
+        # TODO: CHANGE THE CODE; DO NOT RESIZE IMAGES BEFORE/AFTER `cv2.line`!!!
         h, w, _ = img.shape  # height, width, channel
         img = cv2.resize(img, self.img_size_for_inference)  # resize
         for l in lines:

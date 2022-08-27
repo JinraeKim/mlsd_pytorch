@@ -32,7 +32,7 @@ class StairLineDetectorROS:
             cv_color = self.bridge.imgmsg_to_cv2(color_data, "bgr8")
         except CvBridgeError as e:
             print(e)
-        (rows, cols, channels) = cv_color.shape
+        (height, width, channels) = cv_color.shape
 
         # lines = self.stair_line_detector.detect_lines(cv_color)
         # cv_color = self.stair_line_detector.visualise(cv_color, lines, color=(255, 0, 0))
@@ -59,24 +59,32 @@ class StairLineDetectorROS:
         #         li = li + inflated_li
         # # TODO: remove it
         # line_iterators = [[]]
-        # for i in range(int(rows/4)):
-        #     for j in range(int(cols/4)):
+        # for i in range(int(width/4)):
+        #     for j in range(int(height/4)):
         #         line_iterators[0].append([i, j])
         # # TODO: remove it
+        # uvs = []
+        # _cover_width = int(width/2)
+        # _cover_height = int(height)
+        # for i in range(_cover_width):
+        #     for j in range(_cover_height):
+        #         uvs.append([i, j])
         points_iterators = [
             read_points(
                 pcd,
                 field_names=["x", "y", "z"],
                 uvs=line_iterator,
-                # uvs=[[p[0], p[1]] for p in line_iterator],
+                # uvs=uvs,
                 skip_nans=True,
             )
             for line_iterator in line_iterators
         ]
+        # import pdb; pdb.set_trace()
         if self.visualisation:
             # lines
             cv_color = self.stair_line_detector.visualise(cv_color, _lines, color=(0, 0, 255))  # red
             cv_color = self.stair_line_detector.visualise(cv_color, lines, color=(255, 0, 0))  # blue
+            # cv_color[0:_cover_height, 0:_cover_width, :] = [255, 255, 255]
             try:
                 self.color_pub.publish(self.bridge.cv2_to_imgmsg(cv_color, "bgr8"))
             except CvBridgeError as e:
@@ -162,7 +170,6 @@ class StairLineDetectorROS:
     #     return (point - vertical_component)
     #
     def create_line_iterator(self, P1, P2, img, stride=None):
-        # NOTE: line should be from the original img, not (512, 512).
         """
         Produces an array that consists of the coordinates and intensities of each pixel in a line between two points
 
