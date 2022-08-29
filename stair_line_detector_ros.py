@@ -9,7 +9,7 @@ from sensor_msgs.msg import Image, PointCloud2
 from sensor_msgs.point_cloud2 import create_cloud, create_cloud_xyz32, read_points
 from cv_bridge import CvBridge, CvBridgeError
 import message_filters
-from stair_line_detector import StairLineDetector
+from stair_line_detector import StairLineDetector, LinearRegressor
 
 
 class StairLineDetectorROS:
@@ -39,20 +39,25 @@ class StairLineDetectorROS:
 
         _lines = self.stair_line_detector._detect_lines(cv_color)
         lines = self.stair_line_detector._filter_outlier_out(_lines)
+        lines = [lines[-1]]  # TODO: REMOVE IT
         line_iterators = [
             self.create_line_iterator(line[0:2], line[2:4], cv_color)
             for line in lines
         ]
-        points_iterators = [
+        _points_iterators = [
             read_points(
                 pcd,
                 field_names=["x", "y", "z"],
                 uvs=line_iterator,
-                # uvs=uvs,
                 skip_nans=True,
             )
             for line_iterator in line_iterators
         ]
+        points_iterators = [
+            [p for p in pi] for pi in _points_iterators
+        ]  # this is necessary cuz points_iterators is removed after any iteration
+        yaw_estimated = self.estimate_yaw(points_iterators)
+        print("estimated yaw", np.rad2deg(yaw_estimated))
         if self.visualisation:
             # lines
             cv_color = self.stair_line_detector.visualise(cv_color, _lines, color=(0, 0, 255))  # red
@@ -76,6 +81,29 @@ class StairLineDetectorROS:
             pcd_all = create_cloud_xyz32(pcd.header, points_all)
             # pcd_all = create_cloud(pcd.header, pcd.fields, points_all)
             self.pcd_pub.publish(pcd_all)
+        # import pdb; pdb.set_trace()
+
+    def _estimate_yaw(self, points):
+        """
+        Inputs:
+            points: points in 3D spaces (frame: `camera_color_optical_frame`)
+        Outputs:
+            yaw: yaw angle in [-pi/2, pi/2] (would be w.r.t. a fixed frame)
+        """
+        points_x = np.array([p[0] for p in points]).reshape(-1, 1)
+        points_z = np.array([p[2] for p in points])
+        regressor = LinearRegressor()
+        regressor.fit(points_x, points_z)
+        ssr = np.sum(np.square(points_z - regressor.predict(points_x)))  # sum of squared residuals
+        slope, bias = regressor.params
+        yaw = np.arctan(slope)
+        return yaw, ssr
+
+    def estimate_yaw(self, points_iterators, threshold=np.inf):
+        yaw_and_ssrs = [self._estimate_yaw(points) for points in points_iterators]
+        print([x[1] for x in yaw_and_ssrs])
+        yaws = [yas[0] for yas in yaw_and_ssrs if yas[1] < threshold]
+        return np.mean(yaws)
 
     def create_line_iterator(self, P1, P2, img,):
         """
