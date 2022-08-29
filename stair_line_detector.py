@@ -85,12 +85,14 @@ class LinearRegressor:
     def __init__(self):
         self.params = None
         self.params_dim = (1+1, 1)  # in case of receiving no data; +1 is for bias
+        self.success = False
 
     def fit(self, X: np.ndarray, y: np.ndarray):
         r, _ = X.shape
         X = np.hstack([np.ones((r, 1)), X])
         try:
             self.params = np.linalg.inv(X.T @ X) @ X.T @ y
+            self.success = True
         except np.linalg.LinAlgError as e:
             self.params = np.random.normal(size=np.prod(self.params_dim)).reshape(self.params_dim)
             print("maybe too small number of lines are provided, random parameter is generated;", e)

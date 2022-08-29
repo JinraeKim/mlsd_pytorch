@@ -39,7 +39,7 @@ class StairLineDetectorROS:
 
         _lines = self.stair_line_detector._detect_lines(cv_color)
         lines = self.stair_line_detector._filter_outlier_out(_lines)
-        lines = [lines[-1]]  # TODO: REMOVE IT
+        # lines = [lines[-1]]  # TODO: REMOVE IT
         line_iterators = [
             self.create_line_iterator(line[0:2], line[2:4], cv_color)
             for line in lines
@@ -83,7 +83,7 @@ class StairLineDetectorROS:
             self.pcd_pub.publish(pcd_all)
         # import pdb; pdb.set_trace()
 
-    def _estimate_yaw(self, points):
+    def _estimate_yaw(self, points, threshold):
         """
         Inputs:
             points: points in 3D spaces (frame: `camera_color_optical_frame`)
@@ -95,14 +95,15 @@ class StairLineDetectorROS:
         regressor = LinearRegressor()
         regressor.fit(points_x, points_z)
         ssr = np.sum(np.square(points_z - regressor.predict(points_x)))  # sum of squared residuals
-        slope, bias = regressor.params
+        success = (ssr < threshold) and regressor.success
+        bias, slope = regressor.params
         yaw = np.arctan(slope)
-        return yaw, ssr
+        return yaw, success
 
-    def estimate_yaw(self, points_iterators, threshold=np.inf):
-        yaw_and_ssrs = [self._estimate_yaw(points) for points in points_iterators]
-        print([x[1] for x in yaw_and_ssrs])
-        yaws = [yas[0] for yas in yaw_and_ssrs if yas[1] < threshold]
+    def estimate_yaw(self, points_iterators, threshold=1e-2):
+        yaw_and_successes = [self._estimate_yaw(points, threshold) for points in points_iterators]
+        yaws = [yas[0] for yas in yaw_and_successes if yas[1]]
+        print("selected/total yaws", ": ", len(yaws), "/", len(yaw_and_successes))
         return np.mean(yaws)
 
     def create_line_iterator(self, P1, P2, img,):
