@@ -32,43 +32,17 @@ class StairLineDetectorROS:
             cv_color = self.bridge.imgmsg_to_cv2(color_data, "bgr8")
         except CvBridgeError as e:
             print(e)
-        (height, width, channels) = cv_color.shape
+        # (height, width, channels) = cv_color.shape
 
         # lines = self.stair_line_detector.detect_lines(cv_color)
         # cv_color = self.stair_line_detector.visualise(cv_color, lines, color=(255, 0, 0))
 
         _lines = self.stair_line_detector._detect_lines(cv_color)
         lines = self.stair_line_detector._filter_outlier_out(_lines)
-        lines = [lines[-1]]  # TODO: change this
         line_iterators = [
             self.create_line_iterator(line[0:2], line[2:4], cv_color)
             for line in lines
         ]
-        # for li in line_iterators:
-        #     inflated_lis = []
-        #     for inflation in [
-        #             [+3, 0], [+2, 0], [+1, 0], [-1, 0], [-2, 0], [-3, 0],
-        #             [0, +3], [0, +2], [0, +1], [0, -1], [0, -2], [0, -3],
-        #             [+2, +1], [+2, +2], [+1, +2], [+1, +1],
-        #             [+2, -1], [+2, -2], [+1, -2], [+1, -1],
-        #             [-2, +1], [-2, +2], [-1, +2], [-1, +1],
-        #             [-2, -1], [-2, -2], [-1, -2], [-1, -1],
-        #     ]:
-        #         inflated_lis.append([list(inflated) for inflated in np.array(li)+inflation])
-        #     for inflated_li in inflated_lis:
-        #         li = li + inflated_li
-        # # TODO: remove it
-        # line_iterators = [[]]
-        # for i in range(int(width/4)):
-        #     for j in range(int(height/4)):
-        #         line_iterators[0].append([i, j])
-        # # TODO: remove it
-        # uvs = []
-        # _cover_width = int(width/2)
-        # _cover_height = int(height)
-        # for i in range(_cover_width):
-        #     for j in range(_cover_height):
-        #         uvs.append([i, j])
         points_iterators = [
             read_points(
                 pcd,
@@ -79,12 +53,10 @@ class StairLineDetectorROS:
             )
             for line_iterator in line_iterators
         ]
-        # import pdb; pdb.set_trace()
         if self.visualisation:
             # lines
             cv_color = self.stair_line_detector.visualise(cv_color, _lines, color=(0, 0, 255))  # red
             cv_color = self.stair_line_detector.visualise(cv_color, lines, color=(255, 0, 0))  # blue
-            # cv_color[0:_cover_height, 0:_cover_width, :] = [255, 255, 255]
             try:
                 self.color_pub.publish(self.bridge.cv2_to_imgmsg(cv_color, "bgr8"))
             except CvBridgeError as e:
@@ -100,76 +72,12 @@ class StairLineDetectorROS:
             for li in line_iterators:
                 line_points_number += len(li)
             print("lines_points", line_points_number)
-            # points_all = list(set(points_all))
+            points_all = list(set(points_all))
             pcd_all = create_cloud_xyz32(pcd.header, points_all)
             # pcd_all = create_cloud(pcd.header, pcd.fields, points_all)
             self.pcd_pub.publish(pcd_all)
-        import pdb; pdb.set_trace()
 
-    # def _get_point_cloud(self, line_iterator, K):
-    #     """
-    #     Obtain point cloud from line_iterator with depth data.
-    #
-    #     Inputs:
-    #         - line_iterator: line iterator from `N` lines on an image.
-    #             - Size: N x 3
-    #             - line_iterator[i, :] = (u, v, d)
-    #                 - (u, v, 1): homogenous coordinates [1]
-    #                 - d: depth [1]
-    #         - K: intrinsic camera matrix [1, 3]
-    #             - Size: 3x3
-    #     Outputs:
-    #         - pcd: obtained point cloud
-    #             - Size: N x 3
-    #             - pcd[i, :] = (x, y, z) in 3D space [1, 2]
-    #     Notes:
-    #         - The formula is based on [Eq. (2), 1].
-    #         - The frame defined in 3D space for point cloud corresponds to homogenous coordinates, see [Fig. 1a, 2].
-    #     Refs:
-    #         [1] I. Vasiljevic et al., “Neural Ray Surfaces for Self-Supervised Learning of Depth and Ego-motion.” arXiv, Aug. 14, 2020. Accessed: Aug. 24, 2022. [Online]. Available: http://arxiv.org/abs/2008.06630
-    #         [2] D. Rosebrock and F. M. Wahl, “Generic camera calibration and modeling using spline surfaces,” in 2012 IEEE Intelligent Vehicles Symposium, Alcal de Henares , Madrid, Spain, Jun. 2012, pp. 51–56. doi: 10.1109/IVS.2012.6232156.
-    #         [3] http://docs.ros.org/en/melodic/api/sensor_msgs/html/msg/CameraInfo.html
-    #     """
-    #     N = line_iterator.shape[0]
-    #     pcd = np.empty(shape=(line_iterator.shape[0], 3))
-    #     pcd.fill(np.nan)
-    #     K_inv = np.linalg.inv(K)
-    #     for i in range(N):
-    #         u, v, d = line_iterator[i, :]
-    #         p_tilde = np.array([u, v, 1.0])
-    #         P = d * K_inv @ p_tilde
-    #         pcd[i, :] = P  # assumption: camera frame's roll&pitch are zero
-    #     return pcd
-    #
-    # def _get_proj_lines(self, line_iterator, K):
-    #     """
-    #     Obtain lines projected onto xy plane from a line_iterator.
-    #
-    #     Assumption:
-    #         - [A1] roll/pitch of the camera frame w.r.t. fixed frame are zero.
-    #     """
-    #     pcd = self._get_point_cloud(line_iterator, K)
-    #     proj_lines = pcd[:, 0:2]  # (x, y, z) -> (x, y) [A1]
-    #     return proj_lines
-
-    # def _project_onto_plane(self, point, normal):
-    #     """
-    #     Project a vector `point` in 3D space
-    #     to a plane whose normal vector is `normal`.
-    #     Variables:
-    #         point = [x, y, z]
-    #         normal = [u, v, w]
-    #     Notes:
-    #         - The plane contains the origin with normal vector of `normal`.
-    #         - This is for yaw angle estimation (see ROS app of this class).
-    #     Refs:
-    #         https://en.wikipedia.org/wiki/Vector_projection
-    #     """
-    #     normal_unit = normal / np.linalg.norm(normal)
-    #     vertical_component = np.dot(point, normal_unit) * normal_unit
-    #     return (point - vertical_component)
-    #
-    def create_line_iterator(self, P1, P2, img, stride=None):
+    def create_line_iterator(self, P1, P2, img,):
         """
         Produces an array that consists of the coordinates and intensities of each pixel in a line between two points
 
@@ -204,9 +112,7 @@ class StairLineDetectorROS:
         dYa = np.abs(dY)
 
         # predefine numpy array for output based on distance between points
-        itbuffer = np.empty(shape=(np.maximum(dYa, dXa), 2), dtype=np.uint16)
-        # itbuffer = np.empty(shape=(np.maximum(dYa, dXa)+1, 3), dtype=np.float32)
-        # itbuffer.fill(np.nan)
+        itbuffer = np.empty(shape=(np.maximum(dYa, dXa), 2), dtype=np.int)
 
         # Obtain coordinates along the line using a form of Bresenham's algorithm
         negY = P1Y > P2Y
@@ -258,25 +164,6 @@ class StairLineDetectorROS:
         # Get intensities from img ndarray
         # itbuffer[:, 2] = img[itbuffer[:, 1].astype(np.uint), itbuffer[:, 0].astype(np.uint)]
         line_iterator = [list(itbuffer[i, :]) for i in range(itbuffer.shape[0])]
-        if stride is not None:
-            line_iterator = self._inflate_line_iterator(line_iterator, stride)
-        return line_iterator
-
-    def _inflate_line_iterator(self, line_iterator, stride: int = 3):
-        """
-        NOTE: it takes too long time
-        """
-        if stride <= 0.0 or stride % 2 != 1:
-            raise ValueError("Invalid inflation stride")
-        else:
-            for index in line_iterator:
-                for _i in range(stride):
-                    for _j in range(stride):
-                        i = _i - int((stride-1)/2)
-                        j = _j - int((stride-1)/2)
-                        new_index = [index[0]+i, index[1]+j]
-                        if new_index not in line_iterator:
-                            line_iterator.append(new_index)
         return line_iterator
 
 
