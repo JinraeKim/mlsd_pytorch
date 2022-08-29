@@ -20,6 +20,7 @@ class StairLineDetectorROS:
 
         self.color_pub = rospy.Publisher("/camera/color/image_raw_with_lines", Image)
         self.pcd_pub = rospy.Publisher("/camera/depth/color/points_lines", PointCloud2)
+        self.pcd_projected_lines_pub = rospy.Publisher("/camera/depth/color/points_projected_lines", PointCloud2)
 
         self.color_sub = message_filters.Subscriber("/camera/color/image_raw", Image)
         self.pcd_sub = message_filters.Subscriber("/camera/depth/color/points", PointCloud2)
@@ -79,8 +80,16 @@ class StairLineDetectorROS:
             print("lines_points", line_points_number)
             points_all = list(set(points_all))
             pcd_all = create_cloud_xyz32(pcd.header, points_all)
+            # for projected lines
+            points_projected_lines = []
+            for pi in points_iterators:
+                pi_projected = [(p[0], 0, p[2]) for p in pi]
+                points_projected_lines = points_projected_lines + list(pi_projected)
+            points_projected_lines = list(set(points_projected_lines))
+            pcd_projected_lines = create_cloud_xyz32(pcd.header, points_projected_lines)
             # pcd_all = create_cloud(pcd.header, pcd.fields, points_all)
             self.pcd_pub.publish(pcd_all)
+            self.pcd_projected_lines_pub.publish(pcd_projected_lines)
         # import pdb; pdb.set_trace()
 
     def _estimate_yaw(self, points, threshold):
