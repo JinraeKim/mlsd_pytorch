@@ -6,7 +6,7 @@ import numpy as np
 
 # with M-LSD
 from models.mbv2_mlsd_tiny import MobileV2_MLSD_Tiny
-from models.mbv2_mlsd_large import MobileV2_MLSD_Large
+# from models.mbv2_mlsd_large import MobileV2_MLSD_Large
 from utils import pred_lines
 import torch
 
@@ -122,15 +122,7 @@ class StairLineDetector:
         img: opencv color img
         lines: predicted lines.
         """
-        # TODO: CHANGE THE CODE; DO NOT RESIZE IMAGES BEFORE/AFTER `pred_lines`!!!
-        h, w, _ = img.shape  # height, width, channel
-        # DO NOT CHANGE THE ORDER OF CODE
-        img = cv2.resize(img, self.img_size_for_inference)  # resize
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         lines = pred_lines(img, self.model, self.img_size_for_inference, 0.1, 100)
-        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-        img = cv2.resize(img, (w, h))  # re-resize
-        # DO NOT CHANGE THE ORDER OF CODE
         return lines
 
     def _filter_outlier_out(self, lines):
@@ -166,15 +158,11 @@ class StairLineDetector:
         return self._filter_outlier_out(lines)
 
     def visualise(self, img, lines, color=(0, 0, 255)):
-        # TODO: CHANGE THE CODE; DO NOT RESIZE IMAGES BEFORE/AFTER `cv2.line`!!!
-        h, w, _ = img.shape  # height, width, channel
-        img = cv2.resize(img, self.img_size_for_inference)  # resize
         for l in lines:
             cv2.line(
                 img, (int(l[0]), int(l[1])), (int(l[2]), int(l[3])),
                 color, 2,
             )
-        img = cv2.resize(img, (w, h))  # re-resize
         return img
 
 
